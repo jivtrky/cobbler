@@ -1,0 +1,7 @@
+default linux
+prompt 0
+timeout 1
+label linux
+        kernel $kernel_path
+        ipappend 2
+	append $img_path/tboot.gz bypass_inv_err=1 min_ram=0x2000000 ehci_handoff=true loglvl=all serial=115200/921600,8n1,magic logging=serial,memory --- $img_path/xen.gz console=com1 max_dom0_vcpus=1 com1=115200/921600,8n1,magic --- $img_path/vmlinuz quiet root=/dev/ram rw start_install=new eject_cdrom=1 answerfile=$kickstart_path console=xencons console=/dev/tty2 selinux=0 --- $img_path/rootfs.gz --- $img_path/3rd_gen.acm --- $img_path/4th_gen.acm

@@ -84,6 +84,7 @@ class InTftpdManager:
             rendered_file = templater.render(file,metadata,None)
             try:
                 for f in glob.glob(target["boot_files"][file]):
+                    rnd_path = None
                     if f == target["boot_files"][file]:
                         # this wasn't really a glob, so just copy it as is
                         filedst = rendered_file
@@ -93,12 +94,17 @@ class InTftpdManager:
                         tgt_path,tgt_file=os.path.split(f)
                         rnd_path,rnd_file=os.path.split(rendered_file)
                         filedst = os.path.join(rnd_path,tgt_file)
+                    # most of the time we just want to ignore isolinux
+                    # directories, unless this is one of the oddball
+                    # distros where we do want it
+                    if rnd_path is not None and not os.path.isdir(rnd_path):
+                           os.makedirs(rnd_path)
+
                     if not os.path.isfile(filedst):
-                        shutil.copyfile(f, filedst)
-                    self.config.api.log("copied file %s to %s for %s" % (f,filedst,distro.name))
+                           shutil.copyfile(f, filedst)
+                           self.config.api.log("copied file %s to %s for %s" % (f,filedst,distro.name))
             except:
                 self.logger.error("failed to copy file %s to %s for %s" % (f,filedst,distro.name))
-
         return 0
 
     def write_boot_files(self):

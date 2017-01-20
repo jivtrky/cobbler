@@ -34,6 +34,10 @@ import utils
 from cexceptions import CX
 import templar
 
+# Force a write using a pxe template when given these distribution types. 
+PXE_BOOT = [
+    "openxt"
+]
 
 class PXEGen:
     """
@@ -275,7 +279,6 @@ class PXEGen:
 
                 # Only generating grub menus for these arch's:
                 grub_path = os.path.join(self.bootloc, "grub", f1.upper())
-
             elif working_arch == "ia64":
                 # elilo expects files to be named "$name.conf" in the root
                 # and can not do files based on the MAC address
@@ -391,13 +394,11 @@ class PXEGen:
                     arch=distro.arch, include_header=False)
             if contents is not None:
                 pxe_menu_items = pxe_menu_items + contents + "\n"
-
             grub_contents = self.write_pxe_file(filename=None, system=None,
                     profile=profile, distro=distro,
                     arch=distro.arch, include_header=False, format="grub")
             if grub_contents is not None:
                 grub_menu_items = grub_menu_items + grub_contents + "\n"
-
 
         # image names towards the bottom
         for image in image_list:
@@ -569,21 +570,24 @@ class PXEGen:
             # not image based, it's something normalish
 
             img_path = os.path.join("/images",distro.name)
-
+            if 'openxt' == distro.breed:
+                img_path = os.path.join(img_path, "isolinux")
             if 'nexenta' == distro.breed:
-                kernel_path = os.path.join("/images", distro.name, 'platform', 'i86pc', 'kernel', 'amd64', os.path.basename(distro.kernel))
-                initrd_path = os.path.join("/images", distro.name, 'platform', 'i86pc', 'amd64', os.path.basename(distro.initrd))
+                kernel_path = os.path.join(img_path, 'platform', 'i86pc', 'kernel', 'amd64', os.path.basename(distro.kernel))
+                initrd_path = os.path.join(img_path, 'platform', 'i86pc', 'amd64', os.path.basename(distro.initrd))
             else:
-                kernel_path = os.path.join("/images",distro.name,os.path.basename(distro.kernel))
-                initrd_path = os.path.join("/images",distro.name,os.path.basename(distro.initrd))
+                kernel_path = os.path.join(img_path,os.path.basename(distro.kernel))
+                initrd_path = os.path.join(img_path,os.path.basename(distro.initrd))
         
             # Find the kickstart if we inherit from another profile
             if system:
                 blended = utils.blender(self.api, True, system)
             else:
                 blended = utils.blender(self.api, True, profile)
-            kickstart_path = blended.get("kickstart", "")
 
+            kickstart_path = blended.get("kickstart", "")
+            kickstart = self.resolve_kickstart_path(blended,kickstart_path,system,profile)
+            metadata["kickstart_path"] = kickstart
             # update metadata with all known information
             # this allows for more powerful templating
             metadata.update(blended)
@@ -610,17 +614,16 @@ class PXEGen:
         # ---
         # choose a template
         if system:
-            if format == "grub":
+            if format == "grub" and distro.breed not in PXE_BOOT:
                 if system.netboot_enabled:
                     template = os.path.join(self.settings.pxe_template_dir, "grubsystem.template")
                 else:
                     local = os.path.join(self.settings.pxe_template_dir, "grublocal.template")
                     if os.path.exists(local):
                         template = local
+
             else: # pxe
                 if system.netboot_enabled:
-                    template = os.path.join(self.settings.pxe_template_dir,"pxesystem.template")
-
                     if arch.startswith("s390"):
                         template = os.path.join(self.settings.pxe_template_dir,"pxesystem_s390x.template")
                     elif arch == "ia64":
@@ -637,6 +640,10 @@ class PXEGen:
                         # PXE template makes more sense than shoe-horning it into the existing
                         # templates
                         template = os.path.join(self.settings.pxe_template_dir,"pxesystem_esxi.template")
+                    elif distro and distro.os_version.startswith("openxt"):
+                        template = os.path.join(self.settings.pxe_template_dir,"pxesystem_openxt.template")
+                    else:
+                        template = os.path.join(self.settings.pxe_template_dir,"pxesystem.template")
                 else:
                     # local booting on ppc requires removing the system-specific dhcpd.conf filename
                     if arch is not None and arch in ["ppc", "ppc64"]:
@@ -668,7 +675,7 @@ class PXEGen:
                         template = os.path.join(self.settings.pxe_template_dir,"pxelocal.template")
         else:
             # not a system record, so this is a profile record or an image
-            if format == "grub":
+            if format == "grub" and distro.breed not in PXE_BOOT:
                 template = os.path.join(self.settings.pxe_template_dir,"grubprofile.template")
             elif format == 'nexenta':
                 template = os.path.join(self.settings.pxe_template_dir, 'nexenta_profile.template')
@@ -682,9 +689,10 @@ class PXEGen:
                 elif distro and distro.os_version.startswith("esxi"):
                     # ESXi uses a very different pxe method, see comment above in the system section
                     template = os.path.join(self.settings.pxe_template_dir,"pxeprofile_esxi.template")
+                elif distro and distro.os_version.startswith("openxt"):
+                    template = os.path.join(self.settings.pxe_template_dir,"pxeprofile_openxt.template")
                 else:
                     template = os.path.join(self.settings.pxe_template_dir,"pxeprofile.template")
-
 
         if kernel_path is not None:
             metadata["kernel_path"] = kernel_path
@@ -711,7 +719,6 @@ class PXEGen:
         if distro and distro.os_version.startswith("xenserver620"):
             append_line = "%s" % (kernel_options)
         metadata["append_line"] = append_line
-
         # store variables for templating
         metadata["menu_label"] = ""
         if profile:
@@ -778,23 +785,16 @@ class PXEGen:
 
         # kickstart path rewriting (get URLs for local files)
         if kickstart_path is not None and kickstart_path != "":
-
             # FIXME: need to make shorter rewrite rules for these URLs
 
-            try:
-                ipaddress = socket.gethostbyname_ex(blended["http_server"])[2][0]
-            except socket.gaierror:
-                ipaddress = blended["http_server"]
-            if system is not None and kickstart_path.startswith("/"):
-                kickstart_path = "http://%s/cblr/svc/op/ks/system/%s" % (ipaddress, system.name)
-            elif kickstart_path.startswith("/"):
-                kickstart_path = "http://%s/cblr/svc/op/ks/profile/%s" % (ipaddress, profile.name)
-
+            kickstart_path = self.resolve_kickstart_path(blended,kickstart_path,system,profile)
+  
             if distro.breed is None or distro.breed == "redhat":
                 append_line = "%s ks=%s" % (append_line, kickstart_path)
                 gpxe = blended["enable_gpxe"]
                 if gpxe:
                     append_line = append_line.replace('ksdevice=bootif','ksdevice=${net0/mac}')
+
             elif distro.breed == "suse":
                 append_line = "%s autoyast=%s" % (append_line, kickstart_path)
             elif distro.breed == "debian" or distro.breed == "ubuntu":
@@ -1167,4 +1167,16 @@ class PXEGen:
        template_fh.close()
 
        return self.templar.render(template_data, blended, None, obj)
+
+    def resolve_kickstart_path(self,blended,kickstart_path,system,profile):
+        try:
+            ipaddress = socket.gethostbyname_ex(blended["http_server"])[2][0]
+        except socket.gaierror:
+            ipaddress = blended["http_server"]
+        if system is not None and kickstart_path.startswith("/"):
+            kickstart_path = "http://%s/cblr/svc/op/ks/system/%s" % (ipaddress, system.name)
+        elif kickstart_path.startswith("/"):
+            kickstart_path = "http://%s/cblr/svc/op/ks/profile/%s" % (ipaddress, profile.name)
+
+        return kickstart_path
 
